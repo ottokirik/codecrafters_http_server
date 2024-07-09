@@ -29,17 +29,16 @@ fn main() {
 
                 let requested_resource = request_line.split(" ").nth(1).unwrap();
 
-                println!("request: {:?}", requested_resource);
+                let response = match requested_resource {
+                    "/" => "HTTP/1.1 200 OK\r\n\r\n".to_owned(),
+                    s if s.starts_with("/echo/") => {
+                        let word = s.split("/").nth(2).unwrap();
+                        format!("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}", word.len(), word)
+                    }
+                    _ => "HTTP/1.1 404 Not Found\r\n\r\n".to_owned(),
+                };
 
-                if requested_resource == "/" {
-                    stream
-                        .write_all(b"HTTP/1.1 200 OK\r\n\r\n")
-                        .expect("200 \n");
-                } else {
-                    stream
-                        .write_all(b"HTTP/1.1 404 Not Found\r\n\r\n")
-                        .expect("404 \n");
-                }
+                stream.write_all(response.as_bytes()).unwrap();
             }
             Err(e) => {
                 println!("error: {}", e);
