@@ -37,17 +37,26 @@ fn handle_connect(mut stream: TcpStream) {
     let request_string = String::from_utf8_lossy(&buffer[0..bytes_read]);
     let request_vec = request_string.split("\r\n").collect::<Vec<_>>();
 
+    let encoding = request_vec
+        .iter()
+        .find(|str| str.starts_with("Accept-Encoding:"))
+        .unwrap_or(&"");
+
+    let is_gzip = encoding.contains("gzip");
+
     let request_line = request_vec.first().unwrap();
 
     let requested_resource = request_line.split_whitespace().nth(1).unwrap();
 
     let response = match request_line {
-        s if s.starts_with("GET / ") => "HTTP/1.1 200 OK\r\n\r\n".to_owned(),
+        s if s.starts_with("GET / ") => {
+            "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\n\r\n".to_owned()
+        }
 
         s if s.starts_with("GET /echo/") => {
             let word = requested_resource.split("/").nth(2).unwrap();
             format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
+                "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nContent-Encoding: gzip\r\n\r\n{}",
                 word.len(),
                 word
             )
@@ -61,7 +70,7 @@ fn handle_connect(mut stream: TcpStream) {
             let user_agent = user_agent_line.split_whitespace().nth(1).unwrap();
 
             format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
+                "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nContent-Encoding: gzip\r\n\r\n{}",
                 user_agent.len(),
                 user_agent
             )
@@ -75,11 +84,11 @@ fn handle_connect(mut stream: TcpStream) {
 
             let request = match fs::read_to_string(path) {
                 Ok(content) => format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n{}",
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nContent-Encoding: gzip\r\n\r\n{}",
                     content.len(),
                     content
                 ),
-                Err(_) => "HTTP/1.1 404 Not Found\r\n\r\n".to_owned()
+                Err(_) => "HTTP/1.1 404 Not Found\r\nContent-Encoding: gzip\r\n\r\n".to_owned()
             };
 
             request
@@ -94,10 +103,15 @@ fn handle_connect(mut stream: TcpStream) {
 
             file.write_all(content.as_bytes()).unwrap();
 
-            format!("HTTP/1.1 201 Created\r\n\r\n")
+            format!("HTTP/1.1 201 Created\r\nContent-Encoding: gzip\r\n\r\n")
         }
 
-        _ => "HTTP/1.1 404 Not Found\r\n\r\n".to_owned(),
+        _ => "HTTP/1.1 404 Not Found\r\nContent-Encoding: gzip\r\n\r\n".to_owned(),
+    };
+
+    let response = match is_gzip {
+        true => response,
+        false => response.replace("Content-Encoding: gzip\r\n", ""),
     };
 
     stream.write_all(response.as_bytes()).unwrap();
