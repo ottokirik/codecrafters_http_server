@@ -6,6 +6,7 @@ use std::{
     net::{TcpListener, TcpStream},
 };
 
+use flate2::{write::GzEncoder, Compression};
 use http_server_starter_rust::ThreadPool;
 
 fn main() {
@@ -42,7 +43,8 @@ fn handle_connect(mut stream: TcpStream) {
         .find(|str| str.starts_with("Accept-Encoding:"))
         .unwrap_or(&"");
 
-    let encoding = match encoding.contains("gzip") {
+    let is_gzip = encoding.contains("gzip");
+    let encoding = match is_gzip {
         true => "gzip",
         false => "",
     };
@@ -51,7 +53,7 @@ fn handle_connect(mut stream: TcpStream) {
 
     let requested_resource = request_line.split_whitespace().nth(1).unwrap();
 
-    let response = match request_line {
+    let response: String = match request_line {
         s if s.starts_with("GET / ") => HTTPRequestBuilder::default()
             .add_encoding(encoding)
             .build()
@@ -60,13 +62,31 @@ fn handle_connect(mut stream: TcpStream) {
         s if s.starts_with("GET /echo/") => {
             let word = requested_resource.split("/").nth(2).unwrap();
 
-            HTTPRequestBuilder::default()
-                .add_encoding(encoding)
-                .add_content_type("text/plain")
-                .add_content_length(word.len())
-                .add_content(word)
-                .build()
-                .into()
+            match is_gzip {
+                true => {
+                    let (compressed, len) = get_gzip(word.to_owned());
+
+                    let res_str: String = HTTPRequestBuilder::default()
+                        .add_encoding(encoding)
+                        .add_content_type("text/plain")
+                        .add_content_length(len)
+                        .build()
+                        .into();
+
+                    let buffer = [res_str.as_bytes(), compressed.as_slice()].concat();
+
+                    stream.write_all(buffer.as_slice()).unwrap();
+
+                    return;
+                }
+                false => HTTPRequestBuilder::default()
+                    .add_encoding(encoding)
+                    .add_content_type("text/plain")
+                    .add_content(word)
+                    .add_content_length(word.len())
+                    .build()
+                    .into(),
+            }
         }
 
         s if s.starts_with("GET /user-agent") => {
@@ -91,7 +111,7 @@ fn handle_connect(mut stream: TcpStream) {
             let dir = env_args.get(2).unwrap();
             let path = format!("{}{}", dir, file_name);
 
-            let request: String = match fs::read_to_string(path) {
+            match fs::read_to_string(path) {
                 Ok(content) => HTTPRequestBuilder::default()
                     .add_encoding(encoding)
                     .add_content_type("application/octet-stream")
@@ -105,9 +125,7 @@ fn handle_connect(mut stream: TcpStream) {
                     .add_encoding(encoding)
                     .build()
                     .into(),
-            };
-
-            request
+            }
         }
 
         s if s.starts_with("POST /files") => {
@@ -171,8 +189,8 @@ impl HTTPRequestBuilder {
             "{} {}{}{}{}\r\n{}",
             self.protocol,
             self.status,
-            self.content_type,
             self.content_encoding,
+            self.content_type,
             self.content_length,
             self.content
         ))
@@ -202,4 +220,13 @@ impl HTTPRequestBuilder {
         self.status = format!("{}\r\n", status);
         self
     }
+}
+
+fn get_gzip(data: String) -> (Vec<u8>, usize) {
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(data.as_bytes()).unwrap();
+    let compressed = encoder.finish().unwrap();
+    let len = compressed.len();
+
+    (compressed, len)
 }
