@@ -1,6 +1,7 @@
 // Uncomment this block to pass the first stage
 use std::{
-    fs,
+    env,
+    fs::{self, File},
     io::{Read, Write},
     net::{TcpListener, TcpStream},
 };
@@ -36,18 +37,15 @@ fn handle_connect(mut stream: TcpStream) {
     let request_string = String::from_utf8_lossy(&buffer[0..bytes_read]);
     let request_vec = request_string.split("\r\n").collect::<Vec<_>>();
 
-    let request_line = request_vec
-        .iter()
-        .find(|str| str.starts_with("GET"))
-        .unwrap();
+    let request_line = request_vec.first().unwrap();
 
-    let requested_resource = request_line.split(" ").nth(1).unwrap();
+    let requested_resource = request_line.split_whitespace().nth(1).unwrap();
 
-    let response = match requested_resource {
-        "/" => "HTTP/1.1 200 OK\r\n\r\n".to_owned(),
+    let response = match request_line {
+        s if s.starts_with("GET / ") => "HTTP/1.1 200 OK\r\n\r\n".to_owned(),
 
-        s if s.starts_with("/echo/") => {
-            let word = s.split("/").nth(2).unwrap();
+        s if s.starts_with("GET /echo/") => {
+            let word = requested_resource.split("/").nth(2).unwrap();
             format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
                 word.len(),
@@ -55,12 +53,12 @@ fn handle_connect(mut stream: TcpStream) {
             )
         }
 
-        s if s.starts_with("/user-agent") => {
+        s if s.starts_with("GET /user-agent") => {
             let user_agent_line = request_vec
                 .iter()
                 .find(|str| str.starts_with("User-Agent:"))
                 .unwrap_or(&"User-Agent: Unknown");
-            let user_agent = user_agent_line.split(" ").nth(1).unwrap();
+            let user_agent = user_agent_line.split_whitespace().nth(1).unwrap();
 
             format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
@@ -69,10 +67,13 @@ fn handle_connect(mut stream: TcpStream) {
             )
         }
 
-        s if s.starts_with("/files") => {
-            let file_name = s.split("/").nth(2).unwrap();
+        s if s.starts_with("GET /files") => {
+            let file_name = requested_resource.split("/").nth(2).unwrap();
+            let env_args: Vec<_> = env::args().collect();
+            let dir = env_args.get(2).unwrap();
+            let path = format!("{}{}", dir, file_name);
 
-            let request = match fs::read_to_string(format!("/tmp/data/codecrafters.io/http-server-tester/{}", file_name)) {
+            let request = match fs::read_to_string(path) {
                 Ok(content) => format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n{}",
                     content.len(),
@@ -82,6 +83,18 @@ fn handle_connect(mut stream: TcpStream) {
             };
 
             request
+        }
+
+        s if s.starts_with("POST /files") => {
+            let file_name = requested_resource.split("/").nth(2).unwrap();
+            let env_args: Vec<_> = env::args().collect();
+            let dir = env_args.get(2).unwrap();
+            let mut file = File::create(format!("{}{}", dir, file_name)).unwrap();
+            let content = request_vec.last().unwrap();
+
+            file.write_all(content.as_bytes()).unwrap();
+
+            format!("HTTP/1.1 201 Created\r\n\r\n")
         }
 
         _ => "HTTP/1.1 404 Not Found\r\n\r\n".to_owned(),
